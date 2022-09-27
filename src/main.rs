@@ -1,23 +1,20 @@
-use image::Pixel;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::ParallelIterator;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
 use std::time::Instant;
 
 use glam::vec3;
 use glam::Vec3;
 
 const EPSILON: f32 = 0.000001;
+static BOUNCE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug)]
-struct RenderStats {
-    rays: u32,
-}
 
 #[derive(Clone)]
 struct Plane {
@@ -71,7 +68,6 @@ impl Sphere {
 
 #[derive(Default, Clone)]
 struct Material {
-    label: String,
     shininess: f32,
     emit_color: Vec3,
     reflect_color: Vec3,
@@ -93,7 +89,6 @@ struct World {
 fn init_materials() -> Vec<Material> {
     let mut materials = vec![];
     materials.push(Material {
-        label: String::from("sky"),
         emit_color: Vec3 {
             x: 0.3,
             y: 0.4,
@@ -103,7 +98,6 @@ fn init_materials() -> Vec<Material> {
     });
 
     materials.push(Material {
-        label: String::from("plane"),
         shininess: 0.0,
         reflect_color: Vec3 {
             x: 0.3,
@@ -114,7 +108,6 @@ fn init_materials() -> Vec<Material> {
     });
 
     materials.push(Material {
-        label: String::from("sphere1"),
         shininess: 0.0,
         reflect_color: Vec3 {
             x: 1.0,
@@ -125,7 +118,6 @@ fn init_materials() -> Vec<Material> {
     });
 
     materials.push(Material {
-        label: String::from("sphere2"),
         shininess: 0.5,
         reflect_color: Vec3 {
             x: 0.0,
@@ -136,7 +128,6 @@ fn init_materials() -> Vec<Material> {
     });
 
     materials.push(Material {
-        label: String::from("sphere3"),
         shininess: 0.95,
         emit_color: Vec3 {
             x: 0.0,
@@ -152,7 +143,6 @@ fn init_materials() -> Vec<Material> {
     });
 
     materials.push(Material {
-        label: String::from("sphere4"),
         shininess: 0.8,
         emit_color: Vec3 {
             x: 0.1,
@@ -321,7 +311,6 @@ fn render_bucket(
     let output_height = render_settings.output_height;
 
     let contrib = 1.0 / render_settings.samples as f32;
-    let mut casted_rays = 0;
     let ray_origin = world.camera.pos;
     let mut rng = rand::thread_rng();
 
@@ -342,6 +331,7 @@ fn render_bucket(
 
     let mut sub_image = image::ImageBuffer::new(bucket.size, bucket.size);
 
+    let mut casted_rays = 0;
     for y in 0..bucket.size {
         for x in 0..bucket.size {
             let pixel = sub_image.get_pixel_mut(x, y);
@@ -368,13 +358,14 @@ fn render_bucket(
                 };
 
                 color += contrib * raycast(&world, &ray, render_settings.bounces);
-                casted_rays += 1;
+                casted_rays += 1
             }
             color = linear_to_srgb(&color);
 
             *pixel = image::Rgb([(color.x) as u8, (color.y) as u8, (color.z) as u8]);
         }
     }
+    BOUNCE_COUNT.fetch_add(casted_rays, Ordering::Relaxed);
 
     let mut buffer = buffer.lock().unwrap();
     for y in 0..bucket.size {
@@ -405,7 +396,7 @@ fn main() {
     let render_settings = RenderSettings {
         output_width,
         output_height,
-        samples: 8,
+        samples: 1024,
         bounces: 4,
     };
 
@@ -429,7 +420,6 @@ fn main() {
     let bucket_size = 32;
 
     let mut buckets = vec![];
-
     let mut buckets_x_count = output_width / bucket_size;
     let mut buckets_y_count = output_height / bucket_size;
     if output_width % bucket_size != 0 {
@@ -459,7 +449,7 @@ fn main() {
 
     let mut_buffer = Arc::new(Mutex::new(buffer));
     buckets.into_par_iter()
-        .for_each(|b| render_bucket(mut_buffer.clone(), &b, &world, &render_settings));
+        .for_each(|b| render_bucket(Arc::clone(&mut_buffer), &b, &world, &render_settings));
 
     // let mut thread_handles = vec![];
 
@@ -479,12 +469,14 @@ fn main() {
     // }
 
     let time_elapsed = start.elapsed();
-    println!("{:?}", time_elapsed);
+    let bounce_count = BOUNCE_COUNT.load(Ordering::Relaxed) as f32;
 
-    // println!(
-    //     "{:.8} ms/bounce",
-    //     time_elapsed.as_millis() as f32 / casted_rays as f32
-    // );
+    println!("{:#?}", time_elapsed);
+    println!("bounces {}", bounce_count);
+    println!(
+        "{:.8} ms/bounce",
+        time_elapsed.as_millis() as f32 / bounce_count
+    );
     println!("{:#?}", time_elapsed);
     mut_buffer.lock().unwrap().save(file_path).unwrap();
     println!("file saved to {}", file_path);
