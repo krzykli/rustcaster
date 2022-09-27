@@ -1,0 +1,13 @@
+[package]
+name = "raycaster"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+glam = "0.21.3"
+image = "0.24.3"
+num_cpus = "1.13.1"
+rand = "0.8.5"
+rayon = "1.5.3"
